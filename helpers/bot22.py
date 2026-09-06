@@ -10670,26 +10670,31 @@ def _duration_filter(info, *, incomplete):
     return None
 
 
-def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل من SoundCloud عبر yt_dlp — بديل احتياطي موثوق."""
+def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
+
     import yt_dlp
 
     tmp_id   = uuid.uuid4().hex
-    out_tmpl = f"/tmp/ytdl_{tmp_id}.%(ext)s"
-    search   = query_or_url if _is_soundcloud_url(query_or_url) else f"scsearch1:{query_or_url}"
+    out_tmpl = f"/tmp/ytraw_{tmp_id}.%(ext)s"
+    
+    # 1. صياغة الاستعلام لاستخدام ytsearch5
+    if any(domain in query_or_url for domain in ("youtube.com", "youtu.be")):
+        search = query_or_url
+    else:
+        search = f"ytsearch5:{query_or_url}"
 
     opts = {
-        "quiet"        : True,
-        "no_warnings"  : True,
-        "noplaylist"   : True,
-        "socket_timeout": 20,
-        "retries"      : 2,
-        "format"       : "bestaudio/best",
-        "outtmpl"      : out_tmpl,
-        "no_part"      : True,
-        "noprogress"   : True,
-        "match_filter" : _duration_filter,
-        "postprocessors": [{
+        "quiet"          : True,
+        "no_warnings"    : True,
+        "noplaylist"     : True,
+        "socket_timeout" : 20,
+        "retries"        : 3,
+        "format"         : "bestaudio/best",
+        "outtmpl"        : out_tmpl,
+        "no_part"        : True,
+        "noprogress"     : True,
+        "match_filter"   : _duration_filter,
+        "postprocessors" : [{
             "key"             : "FFmpegExtractAudio",
             "preferredcodec"  : "mp3",
             "preferredquality": "96",
@@ -10704,38 +10709,57 @@ def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(search, download=True)
+            # استخراج معلومات النتائج الـ 5 بدون تحميل
+            info = ydl.extract_info(search, download=False)
             if not info:
                 return "", "", 0, "not_found"
+
+            target_url = query_or_url
+
             if "entries" in info:
                 entries = [e for e in (info.get("entries") or []) if e]
                 if not entries:
                     return "", "", 0, "not_found"
-                info = entries[0]
-            title    = info.get("title", "أغنية") or "أغنية"
-            duration = int(info.get("duration") or 0)
+
+                # اختيار أفضل فيديو ضمن النتائج الـ 5 (استبعاد Shorts والمدة المفرطة)
+                selected_entry = entries[0]
+                for entry in entries:
+                    dur = entry.get("duration", 0)
+                    if dur and 20 <= dur <= MAX_DURATION_SEC:
+                        selected_entry = entry
+                        break
+
+                title      = selected_entry.get("title", "أغنية") or "أغنية"
+                duration   = int(selected_entry.get("duration") or 0)
+                target_url = selected_entry.get("webpage_url") or f"https://www.youtube.com/watch?v={selected_entry.get('id')}"
+            else:
+                title    = info.get("title", "أغنية") or "أغنية"
+                duration = int(info.get("duration") or 0)
+
+            # تنزيل الصوت للنتيجة المختارة تلقائياً
+            ydl.download([target_url])
 
     except yt_dlp.utils.DownloadError as e:
         msg = str(e)
-        logger.warning(f"soundcloud yt_dlp error: {msg}")
+        logger.warning(f"youtube yt_dlp error: {msg}")
         if "too_long:" in msg:
             return "", "", 0, "too_long"
         for fname in os.listdir("/tmp"):
-            if fname.startswith(f"ytdl_{tmp_id}"):
+            if fname.startswith(f"ytraw_{tmp_id}"):
                 try: os.remove(f"/tmp/{fname}")
                 except Exception: pass
         return "", "", 0, "download_fail"
     except Exception as e:
-        logger.warning(f"soundcloud error: {e}")
+        logger.warning(f"youtube error: {e}")
         for fname in os.listdir("/tmp"):
-            if fname.startswith(f"ytdl_{tmp_id}"):
+            if fname.startswith(f"ytraw_{tmp_id}"):
                 try: os.remove(f"/tmp/{fname}")
                 except Exception: pass
         return "", "", 0, "download_fail"
 
     audio_path = ""
     for fname in sorted(os.listdir("/tmp")):
-        if fname.startswith(f"ytdl_{tmp_id}"):
+        if fname.startswith(f"ytraw_{tmp_id}"):
             audio_path = f"/tmp/{fname}"
             break
 
@@ -10749,7 +10773,6 @@ def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
         return "", title, duration, "too_big"
 
     return audio_path, title, duration, ""
-
 
 def _search_and_download(query_or_url: str) -> tuple[str, str, int, str]:
     """
