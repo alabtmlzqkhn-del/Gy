@@ -10516,8 +10516,35 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 import os
 import uuid
+import json
 
-# ─── YOUTUBE / AUDIO ──────────────────────────────────────────────
+# ─── JSON CACHE CONFIG ──────────────────────────────────────────
+_CACHE_FILE = "songs_cache.json"
+# ⚠️ ضع هنا آيدي قناتك الخاصة التي سينسخ البوت الملفات إليها (بدل الرقم الحالي)
+_ARCHIVE_CHANNEL_ID = -1004466632149 
+
+
+def _load_cache() -> dict:
+    """تحميل سجل الكاش من ملف JSON."""
+    if os.path.exists(_CACHE_FILE):
+        try:
+            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Error reading cache: {e}")
+    return {}
+
+
+def _save_cache(cache_data: dict) -> None:
+    """حفظ سجل الكاش إلى ملف JSON."""
+    try:
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Error writing cache: {e}")
+
+
+# ─── YOUTUBE / AUDIO ─────────────────────────────────────────────
 
 _SUPPORTED_DOMAINS = (
     "youtube.com", "youtu.be", "soundcloud.com",
@@ -10757,11 +10784,41 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not await _check_forced_sub(update, context):
         return
 
-    query = text[len(prefix):].strip()
+    query = text[len(prefix):].strip().lower()
     if not query:
         await msg.reply_text("- اكتب اسم الأغنية أو رابط بعد الأمر .")
         return
 
+    # ─── 1. إعداد أزرار السورس ───────────────────────────────
+    _owner_id_mu = _bot_owner_id_var.get()
+    _wk_mu = db_get_worker_settings(_owner_id_mu)
+    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ f̶a̶d̶i̶"
+    _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(_src_name_mu, url=_src_url_mu, style=KeyboardButtonStyle.DANGER)
+    ]])
+
+    # ─── 2. فحص الكاش (JSON/Channel) ─────────────────────────
+    cache = _load_cache()
+    if query in cache:
+        cached_data = cache[query]
+        file_id = cached_data.get("file_id")
+        title = cached_data.get("title", "أغنية")
+        duration = cached_data.get("duration", 0)
+
+        try:
+            await msg.reply_audio(
+                audio=file_id,
+                duration=duration,
+                title=title,
+                performer="YouTube",
+                reply_markup=keyboard,
+            )
+            return  # إرسال فوري وتوقف (توفير الوقت والإنترنت)
+        except Exception as e:
+            logger.warning(f"Failed to send cached file_id, downloading again: {e}")
+
+    # ─── 3. التنزيل العادي في حال عدم وجودها بالكاش ─────────
     wait_msg = await msg.reply_text("- جاري البحث والتحميل ...")
     loop     = asyncio.get_running_loop()
 
@@ -10788,17 +10845,11 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await wait_msg.delete()
 
-    _owner_id_mu = _bot_owner_id_var.get()
-    _wk_mu = db_get_worker_settings(_owner_id_mu)
-    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ f̶a̶d̶i̶"
-    _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(_src_name_mu, url=_src_url_mu, style=KeyboardButtonStyle.DANGER)
-    ]])
     sent = False
+    sent_msg = None
     try:
         with open(filepath, "rb") as f:
-            await msg.reply_audio(
+            sent_msg = await msg.reply_audio(
                 audio=f,
                 duration=duration,
                 title=title,
@@ -10809,8 +10860,32 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 connect_timeout=30,
             )
         sent = True
+
+        # ─── 4. حفظ الأغنية بالقناة + JSON للمرات القادمة ─────
+        if sent_msg and sent_msg.audio:
+            file_id = sent_msg.audio.file_id
+            
+            # رفع نسخة للقناة الخاصة (إذا كنت مدمج القناة)
+            if _ARCHIVE_CHANNEL_ID != -1001234567890:
+                try:
+                    ch_msg = await context.bot.send_audio(
+                        chat_id=_ARCHIVE_CHANNEL_ID,
+                        audio=file_id,
+                        caption=f"🎵 {title}\n🔎 Key: {query}"
+                    )
+                    file_id = ch_msg.audio.file_id  # تحديث للـ file_id الخالد الخاص بالقناة
+                except Exception as _ch_err:
+                    logger.warning(f"Failed to forward to archive channel: {_ch_err}")
+
+            # حفظ الكيانات
+            cache[query] = {
+                "file_id": file_id,
+                "title": title,
+                "duration": duration
+            }
+            _save_cache(cache)
+
     except telegram.error.TimedOut:
-        # الملف وصل لتيليغرام لكن انقطع الاتصال — لا نرسل خطأ
         sent = True
         logger.warning("reply_audio timed out but upload likely succeeded")
     except Exception as e:
@@ -10822,6 +10897,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(filepath)
         except Exception as _e:
             logger.debug(f"silent except at L7963: {_e!r}")
+
 
 async def warn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg  = update.message
