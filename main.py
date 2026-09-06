@@ -5,6 +5,13 @@ import os
 import pkgutil
 from pathlib import Path
 
+# إضافة مكتبة static-ffmpeg لتثبيت وربط FFmpeg تلقائياً
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except ImportError:
+    pass
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
