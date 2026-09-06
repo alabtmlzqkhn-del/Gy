@@ -10520,8 +10520,6 @@ import json
 import asyncio
 import logging
 import telegram
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButtonStyle
-from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
