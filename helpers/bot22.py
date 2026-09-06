@@ -10516,7 +10516,6 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 import os
 import uuid
-import yt-dlp
 
 # ─── YOUTUBE / AUDIO ──────────────────────────────────────────────
 
