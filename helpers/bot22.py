@@ -10531,7 +10531,7 @@ _ARCHIVE_CHANNEL_ID = -1004466632149
 
 MAX_DURATION_SEC = 15 * 60   # 15 دقيقة
 MAX_FILE_MB      = 49
-_COOKIES_PATH    = "/home/runner/workspace/youtube.com_cookies.txt"
+_COOKIES_PATH    = "cookies.txt"
 
 
 def _load_cache() -> dict:
