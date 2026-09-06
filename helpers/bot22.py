@@ -2015,8 +2015,8 @@ logger = logging.getLogger(__name__)
 
 BOT_PASSWORD_HASH = "f217c659d9ad0f3dbabaeb5a2f5f751e0ac9172c7803ba6a8bbe0901532d7872"
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-BOT_OWNER_ID = os.getenv("BOT_OWNER_ID", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8516176029:AAGWgxZejvcHqBqg04-ko_lQyUevHHkapiQ").strip()
+BOT_OWNER_ID = os.getenv("BOT_OWNER_ID", "8065884629").strip()
 try:
     SOURCE_DEV_ID = int(BOT_OWNER_ID) if BOT_OWNER_ID else 0
 except (ValueError, TypeError):
