@@ -10514,7 +10514,7 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-import os
+Import os
 import uuid
 import json
 import asyncio
@@ -10588,6 +10588,12 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
         "noprogress"       : True,
         "match_filter"     : _duration_filter,
         "cookiefile"       : _COOKIES_PATH,  # اعتماد الكوكيز بشكل أساسي
+        "extractor_args"   : {
+            "youtube": {
+                "player_client": ["android", "web"],  # استخدام أندرويد وويب لحل مشكلة الصفحة
+                "po_token": ["android+gvs"]
+            }
+        },
         "postprocessors"   : [{
             "key"             : "FFmpegExtractAudio",
             "preferredcodec"  : "mp3",
@@ -10770,7 +10776,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ f̶a̶d̶i̶"
     _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(_src_name_mu, url=_src_url_mu, style=KeyboardButtonStyle.DANGER)
+        InlineKeyboardButton(_src_name_mu, url=_src_url_mu)
     ]])
 
     cache = _load_cache()
@@ -10837,7 +10843,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if sent_msg and sent_msg.audio:
             file_id = sent_msg.audio.file_id
             
-            if _ARCHIVE_CHANNEL_ID != -1001234567890:
+            if _ARCHIVE_CHANNEL_ID != -1004466632149:
                 try:
                     ch_msg = await context.bot.send_audio(
                         chat_id=_ARCHIVE_CHANNEL_ID,
@@ -10867,6 +10873,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(filepath)
         except Exception as _e:
             logger.debug(f"silent except at L7963: {_e!r}")
+
 
 
 async def warn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
