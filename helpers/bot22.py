@@ -10514,7 +10514,9 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
+import os
 import uuid
+import yt-dlp
 
 # ─── YOUTUBE / AUDIO ──────────────────────────────────────────────
 
@@ -10557,21 +10559,43 @@ def _convert_to_mp3(input_path: str, output_path: str) -> bool:
 
 
 def _download_youtube_pytubefix(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل من يوتيوب عبر pytubefix — يتجاوز حظر IP السيرفر."""
+    """تحميل من يوتيوب عبر pytubefix مع دعم الكوكيز وعملاء (iOS / Android / Web)."""
     from pytubefix import YouTube, Search
 
     tmp_id = uuid.uuid4().hex
     tmp_dir = "/tmp"
+    cookies = _COOKIES_PATH if os.path.exists(_COOKIES_PATH) else None
+
+    clients = ["ANDROID", "IOS", "WEB"]
+    yt = None
+    last_err = "download_fail"
+
+    for client_name in clients:
+        try:
+            kwargs = {"client": client_name}
+            if cookies:
+                kwargs["cookies_filepath"] = cookies
+
+            if _is_youtube_url(query_or_url):
+                yt = YouTube(query_or_url, use_oauth=False, allow_oauth_cache=False, **kwargs)
+            else:
+                s = Search(query_or_url, **kwargs)
+                results = s.results
+                if not results:
+                    last_err = "not_found"
+                    continue
+                yt = results[0]
+
+            if yt:
+                break
+        except Exception as e:
+            logger.warning(f"pytubefix client {client_name} error: {e}")
+            continue
+
+    if not yt:
+        return "", "", 0, last_err
 
     try:
-        if _is_youtube_url(query_or_url):
-            yt = YouTube(query_or_url, use_oauth=False, allow_oauth_cache=False)
-        else:
-            results = Search(query_or_url).results
-            if not results:
-                return "", "", 0, "not_found"
-            yt = results[0]
-
         duration = yt.length or 0
         if duration > MAX_DURATION_SEC:
             return "", "", 0, "too_long"
@@ -10620,114 +10644,82 @@ def _duration_filter(info, *, incomplete):
     return None
 
 
-def _download_youtube_pytubefix(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل من YouTube عبر yt-dlp باستخدام cookies.txt."""
+def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
+    """تحميل من SoundCloud عبر yt_dlp — بديل احتياطي موثوق."""
     import yt_dlp
 
-    tmp_id = uuid.uuid4().hex
-    out_tmpl = f"/tmp/ytraw_{tmp_id}.%(ext)s"
+    tmp_id   = uuid.uuid4().hex
+    out_tmpl = f"/tmp/ytdl_{tmp_id}.%(ext)s"
+    search   = query_or_url if _is_soundcloud_url(query_or_url) else f"scsearch1:{query_or_url}"
 
-    # ضع cookies.txt بجانب main.py
-    cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+    opts = {
+        "quiet"        : True,
+        "no_warnings"  : True,
+        "noplaylist"   : True,
+        "socket_timeout": 20,
+        "retries"      : 2,
+        "format"       : "bestaudio/best",
+        "outtmpl"      : out_tmpl,
+        "no_part"      : True,
+        "noprogress"   : True,
+        "match_filter" : _duration_filter,
+        "postprocessors": [{
+            "key"             : "FFmpegExtractAudio",
+            "preferredcodec"  : "mp3",
+            "preferredquality": "96",
+        }],
+    }
 
-    title = "أغنية"
+    if os.path.exists(_COOKIES_PATH):
+        opts["cookiefile"] = _COOKIES_PATH
+
+    title    = "أغنية"
     duration = 0
 
     try:
-        # إذا كان نص بحث، نبحث في YouTube
-        if _is_youtube_url(query_or_url):
-            search = query_or_url
-        else:
-            search = f"ytsearch1:{query_or_url}"
-
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-
-            # استخدام كوكيز YouTube
-            "cookiefile": cookies_path,
-
-            "socket_timeout": 20,
-            "retries": 2,
-
-            "format": "bestaudio/best",
-
-            "outtmpl": out_tmpl,
-            "no_part": True,
-            "noprogress": True,
-
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "96",
-            }],
-        }
-
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(search, download=True)
-
             if not info:
                 return "", "", 0, "not_found"
-
             if "entries" in info:
                 entries = [e for e in (info.get("entries") or []) if e]
-
                 if not entries:
                     return "", "", 0, "not_found"
-
                 info = entries[0]
-
-            title = info.get("title", "أغنية") or "أغنية"
+            title    = info.get("title", "أغنية") or "أغنية"
             duration = int(info.get("duration") or 0)
 
-            if duration > MAX_DURATION_SEC:
-                return "", title, duration, "too_long"
-
     except yt_dlp.utils.DownloadError as e:
-        logger.warning(f"YouTube yt_dlp error: {e}")
-
+        msg = str(e)
+        logger.warning(f"soundcloud yt_dlp error: {msg}")
+        if "too_long:" in msg:
+            return "", "", 0, "too_long"
         for fname in os.listdir("/tmp"):
-            if fname.startswith(f"ytraw_{tmp_id}"):
-                try:
-                    os.remove(f"/tmp/{fname}")
-                except Exception:
-                    pass
-
+            if fname.startswith(f"ytdl_{tmp_id}"):
+                try: os.remove(f"/tmp/{fname}")
+                except Exception: pass
         return "", "", 0, "download_fail"
-
     except Exception as e:
-        logger.warning(f"YouTube error: {e}")
-
+        logger.warning(f"soundcloud error: {e}")
         for fname in os.listdir("/tmp"):
-            if fname.startswith(f"ytraw_{tmp_id}"):
-                try:
-                    os.remove(f"/tmp/{fname}")
-                except Exception:
-                    pass
-
+            if fname.startswith(f"ytdl_{tmp_id}"):
+                try: os.remove(f"/tmp/{fname}")
+                except Exception: pass
         return "", "", 0, "download_fail"
 
-    # البحث عن ملف MP3 الناتج
     audio_path = ""
-
-    for fname in os.listdir("/tmp"):
-        if fname.startswith(f"ytraw_{tmp_id}") and fname.endswith(".mp3"):
+    for fname in sorted(os.listdir("/tmp")):
+        if fname.startswith(f"ytdl_{tmp_id}"):
             audio_path = f"/tmp/{fname}"
             break
 
     if not audio_path or not os.path.exists(audio_path):
-        return "", title, duration, "download_fail"
+        return "", "", 0, "download_fail"
 
-    # فحص الحجم
     size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-
     if size_mb > MAX_FILE_MB:
-        try:
-            os.remove(audio_path)
-        except Exception:
-            pass
-
+        try: os.remove(audio_path)
+        except Exception: pass
         return "", title, duration, "too_big"
 
     return audio_path, title, duration, ""
@@ -10831,7 +10823,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(filepath)
         except Exception as _e:
             logger.debug(f"silent except at L7963: {_e!r}")
-
 
 async def warn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg  = update.message
