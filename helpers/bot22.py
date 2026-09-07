@@ -10516,6 +10516,8 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     
 
+
+import os
 import uuid
 import json
 import asyncio
@@ -10561,10 +10563,9 @@ def _duration_filter(info, *, incomplete):
 
 
 def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل أساسي يعتمد بشكل إجباري على ملف الكوكيز للبحث والتحميل من يوتيوب."""
+    """تحميل أساسي يبحث في أول 4 نتائج يوتيوب مع اعتماد الكوكيز ومشغلات أندرويد/ويب."""
     import yt_dlp
 
-    # التأكد أولاً من وجود ملف الكوكيز
     if not os.path.exists(_COOKIES_PATH):
         logger.error(f"YouTube Cookies file not found at {_COOKIES_PATH}")
         return "", "", 0, "no_cookies"
@@ -10575,7 +10576,8 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
     if any(d in query_or_url for d in ("youtube.com", "youtu.be", "music.youtube.com")):
         search = query_or_url
     else:
-        search = f"ytsearch3:{query_or_url}"
+        # البحث في أول 4 نتائج من يوتيوب
+        search = f"ytsearch4:{query_or_url}"
 
     opts = {
         "quiet"            : True,
@@ -10588,10 +10590,10 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
         "no_part"          : True,
         "noprogress"       : True,
         "match_filter"     : _duration_filter,
-        "cookiefile"       : _COOKIES_PATH,  # اعتماد الكوكيز بشكل أساسي
+        "cookiefile"       : _COOKIES_PATH,
         "extractor_args"   : {
             "youtube": {
-                "player_client": ["android", "web"],  # استخدام أندرويد وويب لحل مشكلة الصفحة
+                "player_client": ["android", "web"],
                 "po_token": ["android+gvs"]
             }
         },
@@ -10671,12 +10673,14 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
 
 
 def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل من SoundCloud عبر yt_dlp بديل احتياطي."""
+    """تحميل احتياطي يبحث في أول 4 نتائج من SoundCloud عبر yt_dlp."""
     import yt_dlp
 
     tmp_id   = uuid.uuid4().hex
     out_tmpl = f"/tmp/ytdl_{tmp_id}.%(ext)s"
-    search   = query_or_url if "soundcloud.com" in query_or_url else f"scsearch1:{query_or_url}"
+    
+    # البحث في أول 4 نتائج من ساوند كلاود
+    search   = query_or_url if "soundcloud.com" in query_or_url else f"scsearch4:{query_or_url}"
 
     opts = {
         "quiet"        : True,
@@ -10776,8 +10780,9 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _wk_mu = db_get_worker_settings(_owner_id_mu)
     _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ f̶a̶d̶i̶"
     _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
+    
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(_src_name_mu, url=_src_url_mu)
+        InlineKeyboardButton(f"🔴 {_src_name_mu}", url=_src_url_mu)
     ]])
 
     cache = _load_cache()
@@ -10817,6 +10822,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "too_long"     : f"- الأغنية تتجاوز الحد الأقصى ({MAX_DURATION_SEC // 60} دقيقة) .",
         "download_fail": "- فشل التحميل ، جرب مرة ثانية أو أرسل الرابط مباشرة .",
         "too_big"      : "- الملف كبير جداً (+49MB) ، جرب أغنية أقصر .",
+        "no_cookies"   : "- ملف الكوكيز غير موجود (cookies.txt) ، تأكد من توفر الملف .",
     }
 
     if err:
@@ -10874,7 +10880,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(filepath)
         except Exception as _e:
             logger.debug(f"silent except at L7963: {_e!r}")
-
 
 
 async def warn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
