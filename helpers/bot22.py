@@ -10517,23 +10517,27 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
 
 
+
 import os
 import uuid
 import json
-import asyncio
-import os
-import uuid
-import json
+import base64
 import asyncio
 import logging
+import requests
 import telegram
 
 logger = logging.getLogger(__name__)
 
-# ─── JSON CACHE CONFIG ──────────────────────────────────────────
-_CACHE_FILE = "songs_cache.json"
+# ─── GITHUB CACHE CONFIG ──────────────────────────────────────────
+GITHUB_TOKEN  = "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"
+GITHUB_REPO   = "alabtmlzqkhn-del/Gy"
+GITHUB_BRANCH = "main"
+FILE_PATH     = "songs_cache.json"
 
-# اضع هنا معرف قناتك العامة (تأكد أن البوت المصنع والبوتات الصانعة مشرفين فيها)
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
+
+# معرف قناة الأرشيف العامة
 _ARCHIVE_CHANNEL_ID = -1004466632149 
 
 MAX_DURATION_SEC = 15 * 60   # 15 دقيقة
@@ -10543,22 +10547,60 @@ MAX_FILE_MB      = 49
 _COOKIES_PATH = os.path.abspath("cookies.txt")
 
 
-def _load_cache() -> dict:
-    if os.path.exists(_CACHE_FILE):
-        try:
-            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Error reading cache: {e}")
-    return {}
+def _get_github_headers():
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
 
 
-def _save_cache(cache_data: dict) -> None:
+def _load_cache_from_github() -> tuple[dict, str]:
+    """جلب وتحميل كاش الأغاني مباشرة من مستودع GitHub"""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return {}, ""
+
     try:
-        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        response = requests.get(GITHUB_API_URL, headers=_get_github_headers(), timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            sha = data.get("sha", "")
+            content = base64.b64decode(data.get("content", "")).decode("utf-8")
+            return json.loads(content), sha
+        elif response.status_code == 404:
+            return {}, ""
     except Exception as e:
-        logger.warning(f"Error writing cache: {e}")
+        logger.error(f"Error fetching cache from GitHub: {e}")
+
+    return {}, ""
+
+
+def _save_cache_to_github(cache_data: dict, sha: str = "") -> str:
+    """رفع وتحديث ملف الكاش على مستودع GitHub بشكل دائم"""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return ""
+
+    json_str = json.dumps(cache_data, ensure_ascii=False, indent=2)
+    base64_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+
+    if not sha:
+        _, sha = _load_cache_from_github()
+
+    payload = {
+        "message": "Auto-update songs_cache.json via Bot",
+        "content": base64_content,
+        "branch": GITHUB_BRANCH
+    }
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        response = requests.put(GITHUB_API_URL, headers=_get_github_headers(), json=payload, timeout=15)
+        if response.status_code in (200, 201):
+            return response.json().get("content", {}).get("sha", "")
+    except Exception as e:
+        logger.error(f"Error saving cache to GitHub: {e}")
+
+    return sha
 
 
 def _duration_filter(info, *, incomplete):
@@ -10786,7 +10828,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "SOURCE fadi"
     _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
 
-    # إنشاء زر السورس الأحمر باستخدام style=KeyboardButtonStyle.DANGER
+    # إنشاء زر السورس الأحمـر
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(
             text=_src_name_mu, 
@@ -10795,8 +10837,10 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     ]])
 
-    # 1. فحص الكاش الشامل أولاً للإرسال السريع دون تحميل
-    cache = _load_cache()
+    # 1. فحص الكاش الموحد من جيت هاب أولاً للإرسال السريع دون تحميل
+    loop = asyncio.get_running_loop()
+    cache, cache_sha = await loop.run_in_executor(None, _load_cache_from_github)
+
     if query in cache:
         cached_data = cache[query]
         file_id = cached_data.get("file_id")
@@ -10817,7 +10861,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # 2. في حال عدم وجودها في الكاش يتم التحميل
     wait_msg = await msg.reply_text("- جاري البحث والتحميل ...")
-    loop     = asyncio.get_running_loop()
 
     try:
         filepath, title, duration, err = await asyncio.wait_for(
@@ -10860,7 +10903,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         sent = True
 
-        # 3. إرسال الأغنية تلقائياً إلى قناة الأرشيف وحفظ الـ file_id لجميع البوتات المصنوعة
+        # 3. إرسال الأغنية تلقائياً إلى قناة الأرشيف وحفظ الـ file_id دائمياً في GitHub
         if sent_msg and sent_msg.audio:
             file_id = sent_msg.audio.file_id
             
@@ -10877,13 +10920,13 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 except Exception as _ch_err:
                     logger.warning(f"Failed to forward to archive channel: {_ch_err}")
 
-            # حفظ الأغنية في الملف الموحد
+            # تحديث الملف الموحد ورفعه سحابياً لـ GitHub
             cache[query] = {
                 "file_id": file_id,
                 "title": title,
                 "duration": duration
             }
-            _save_cache(cache)
+            await loop.run_in_executor(None, _save_cache_to_github, cache, cache_sha)
 
     except telegram.error.TimedOut:
         sent = True
@@ -10897,6 +10940,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(filepath)
         except Exception as _e:
             logger.debug(f"silent except at L7963: {_e!r}")
+
 
 async def warn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg  = update.message
