@@ -10521,6 +10521,10 @@ import os
 import uuid
 import json
 import asyncio
+import os
+import uuid
+import json
+import asyncio
 import logging
 import telegram
 
@@ -10528,11 +10532,15 @@ logger = logging.getLogger(__name__)
 
 # ─── JSON CACHE CONFIG ──────────────────────────────────────────
 _CACHE_FILE = "songs_cache.json"
+
+# اضع هنا معرف قناتك العامة (تأكد أن البوت المصنع والبوتات الصانعة مشرفين فيها)
 _ARCHIVE_CHANNEL_ID = -1004466632149 
 
 MAX_DURATION_SEC = 15 * 60   # 15 دقيقة
 MAX_FILE_MB      = 49
-_COOKIES_PATH    = "cookies.txt"
+
+# المسار التلقائي لملف الكوكيز في المجلد الرئيسي
+_COOKIES_PATH = os.path.abspath("cookies.txt")
 
 
 def _load_cache() -> dict:
@@ -10563,10 +10571,9 @@ def _duration_filter(info, *, incomplete):
 
 
 def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل أساسي يعتمد بشكل إجباري على ملف الكوكيز للبحث والتحميل من يوتيوب."""
+    """تحميل أساسي يعتمد على ملف الكوكيز للبحث والتحميل من يوتيوب."""
     import yt_dlp
 
-    # التأكد أولاً من وجود ملف الكوكيز
     if not os.path.exists(_COOKIES_PATH):
         logger.error(f"YouTube Cookies file not found at {_COOKIES_PATH}")
         return "", "", 0, "no_cookies"
@@ -10577,7 +10584,7 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
     if any(d in query_or_url for d in ("youtube.com", "youtu.be", "music.youtube.com")):
         search = query_or_url
     else:
-        search = f"ytsearch3:{query_or_url}"
+        search = f"ytsearch4:{query_or_url}"
 
     opts = {
         "quiet"            : True,
@@ -10590,10 +10597,10 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
         "no_part"          : True,
         "noprogress"       : True,
         "match_filter"     : _duration_filter,
-        "cookiefile"       : _COOKIES_PATH,  # اعتماد الكوكيز بشكل أساسي
+        "cookiefile"       : _COOKIES_PATH,
         "extractor_args"   : {
             "youtube": {
-                "player_client": ["android", "web"],  # استخدام أندرويد وويب لحل مشكلة الصفحة
+                "player_client": ["android", "web"],
                 "po_token": ["android+gvs"]
             }
         },
@@ -10776,12 +10783,19 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     _owner_id_mu = _bot_owner_id_var.get()
     _wk_mu = db_get_worker_settings(_owner_id_mu)
-    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ f̶a̶d̶i̶"
+    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "SOURCE fadi"
     _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
+
+    # إنشاء زر السورس الأحمر باستخدام style=KeyboardButtonStyle.DANGER
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(_src_name_mu, url=_src_url_mu)
+        InlineKeyboardButton(
+            text=_src_name_mu, 
+            url=_src_url_mu, 
+            style=KeyboardButtonStyle.DANGER
+        )
     ]])
 
+    # 1. فحص الكاش الشامل أولاً للإرسال السريع دون تحميل
     cache = _load_cache()
     if query in cache:
         cached_data = cache[query]
@@ -10801,6 +10815,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as e:
             logger.warning(f"Failed to send cached file_id, downloading again: {e}")
 
+    # 2. في حال عدم وجودها في الكاش يتم التحميل
     wait_msg = await msg.reply_text("- جاري البحث والتحميل ...")
     loop     = asyncio.get_running_loop()
 
@@ -10819,6 +10834,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "too_long"     : f"- الأغنية تتجاوز الحد الأقصى ({MAX_DURATION_SEC // 60} دقيقة) .",
         "download_fail": "- فشل التحميل ، جرب مرة ثانية أو أرسل الرابط مباشرة .",
         "too_big"      : "- الملف كبير جداً (+49MB) ، جرب أغنية أقصر .",
+        "no_cookies"   : "- ملف الكوكيز غير موجود (cookies.txt) ، تأكد من رفعه بالمجلد الرئيسي .",
     }
 
     if err:
@@ -10830,6 +10846,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     sent = False
     sent_msg = None
     try:
+        # إرسال الأغنية للمستخدم
         with open(filepath, "rb") as f:
             sent_msg = await msg.reply_audio(
                 audio=f,
@@ -10843,20 +10860,24 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         sent = True
 
+        # 3. إرسال الأغنية تلقائياً إلى قناة الأرشيف وحفظ الـ file_id لجميع البوتات المصنوعة
         if sent_msg and sent_msg.audio:
             file_id = sent_msg.audio.file_id
             
-            if _ARCHIVE_CHANNEL_ID != -1004466632149:
+            if _ARCHIVE_CHANNEL_ID:
                 try:
                     ch_msg = await context.bot.send_audio(
                         chat_id=_ARCHIVE_CHANNEL_ID,
                         audio=file_id,
-                        caption=f"🎵 {title}\n🔎 Key: {query}"
+                        caption=f"🎵 {title}\n🔎 Key: {query}",
+                        reply_markup=keyboard
                     )
+                    # اعتماد file_id الخاص بالقناة لضمان بقائه يعمل دائماً للجميع
                     file_id = ch_msg.audio.file_id
                 except Exception as _ch_err:
                     logger.warning(f"Failed to forward to archive channel: {_ch_err}")
 
+            # حفظ الأغنية في الملف الموحد
             cache[query] = {
                 "file_id": file_id,
                 "title": title,
@@ -10876,7 +10897,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(filepath)
         except Exception as _e:
             logger.debug(f"silent except at L7963: {_e!r}")
-
 
 async def warn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg  = update.message
