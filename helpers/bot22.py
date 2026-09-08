@@ -10519,101 +10519,101 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
-import os
 import uuid
-import json
-import base64
-import asyncio
-import logging
-import requests
-import telegram
 
-logger = logging.getLogger(__name__)
+# ─── YOUTUBE / AUDIO ──────────────────────────────────────────────
 
-# ─── GITHUB CACHE CONFIG ──────────────────────────────────────────
-GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "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")
-GITHUB_REPO   = "alabtmlzqkhn-del/Gy"
-GITHUB_BRANCH = "main"
-FILE_PATH     = "songs_cache.json"
-
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{FILE_PATH}"
-
-# معرف قناة الأرشيف العامة
-_ARCHIVE_CHANNEL_ID = -1004466632149 
+_SUPPORTED_DOMAINS = (
+    "youtube.com", "youtu.be", "soundcloud.com",
+    "music.youtube.com", "m.youtube.com",
+)
 
 MAX_DURATION_SEC = 15 * 60   # 15 دقيقة
 MAX_FILE_MB      = 49
 
-# المسار التلقائي لملف الكوكيز في المجلد الرئيسي
-_COOKIES_PATH = os.path.abspath("cookies.txt")
+_COOKIES_PATH = "cookies.txt"
 
 
-def _get_github_headers():
-    return {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
+def _is_youtube_url(text: str) -> bool:
+    return any(d in text for d in ("youtube.com", "youtu.be", "music.youtube.com", "m.youtube.com"))
 
 
-def _load_cache_from_github() -> tuple[dict, str]:
-    if not GITHUB_TOKEN or "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" in GITHUB_TOKEN:
-        logger.error("GitHub Cache Error: GITHUB_TOKEN is missing!")
-        return {}, ""
+def _is_soundcloud_url(text: str) -> bool:
+    return "soundcloud.com" in text
 
+
+def _is_supported_url(text: str) -> bool:
+    return any(d in text for d in _SUPPORTED_DOMAINS)
+
+
+def _convert_to_mp3(input_path: str, output_path: str) -> bool:
+    """تحويل الملف الصوتي إلى mp3 عبر ffmpeg."""
+    import subprocess
     try:
-        response = requests.get(GITHUB_API_URL, headers=_get_github_headers(), timeout=10)
-        logger.info(f"GitHub Fetch Status: {response.status_code}")
-        if response.status_code == 200:
-            data = response.json()
-            sha = data.get("sha", "")
-            content_b64 = data.get("content", "")
-            if not content_b64:
-                return {}, sha
-            content = base64.b64decode(content_b64).decode("utf-8").strip()
-            if not content:
-                return {}, sha
-            return json.loads(content), sha
-        elif response.status_code == 404:
-            logger.warning("GitHub Cache Error: songs_cache.json not found (404).")
-            return {}, ""
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", input_path, "-vn",
+             "-acodec", "libmp3lame", "-ab", "96k", output_path],
+            capture_output=True, timeout=120
+        )
+        return result.returncode == 0
     except Exception as e:
-        logger.error(f"Error fetching cache from GitHub: {e}")
+        logger.warning(f"ffmpeg conversion error: {e}")
+        return False
 
-    return {}, ""
 
+def _download_youtube_pytubefix(query_or_url: str) -> tuple[str, str, int, str]:
+    """تحميل من يوتيوب عبر pytubefix — يتجاوز حظر IP السيرفر."""
+    from pytubefix import YouTube, Search
 
-def _save_cache_to_github(cache_data: dict, sha: str = "") -> str:
-    if not GITHUB_TOKEN or "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" in GITHUB_TOKEN:
-        logger.error("GitHub Save Error: GITHUB_TOKEN is missing!")
-        return ""
-
-    json_str = json.dumps(cache_data, ensure_ascii=False, indent=2)
-    base64_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
-
-    # جلب أحدث sha لمنع التعارض
-    _, latest_sha = _load_cache_from_github()
-    current_sha = latest_sha if latest_sha else sha
-
-    payload = {
-        "message": "Auto-update songs_cache.json via Bot",
-        "content": base64_content,
-        "branch": GITHUB_BRANCH
-    }
-    if current_sha:
-        payload["sha"] = current_sha
+    tmp_id = uuid.uuid4().hex
+    tmp_dir = "/tmp"
 
     try:
-        response = requests.put(GITHUB_API_URL, headers=_get_github_headers(), json=payload, timeout=15)
-        logger.info(f"GitHub Save Status Code: {response.status_code}")
-        if response.status_code in (200, 201):
-            logger.info("Successfully saved cache to GitHub!")
-            return response.json().get("content", {}).get("sha", "")
+        if _is_youtube_url(query_or_url):
+            yt = YouTube(query_or_url, use_oauth=False, allow_oauth_cache=False)
         else:
-            logger.error(f"GitHub Save Failed Details: {response.text}")
-    except Exception as e:
-        logger.error(f"Error saving cache to GitHub: {e}")
+            results = Search(query_or_url).results
+            if not results:
+                return "", "", 0, "not_found"
+            yt = results[0]
 
-    return current_sha
+        duration = yt.length or 0
+        if duration > MAX_DURATION_SEC:
+            return "", "", 0, "too_long"
+
+        title = yt.title or "أغنية"
+
+        stream = yt.streams.filter(only_audio=True).order_by("abr").last()
+        if not stream:
+            return "", "", 0, "download_fail"
+
+        raw_filename = f"ytraw_{tmp_id}"
+        raw_path = stream.download(output_path=tmp_dir, filename=raw_filename)
+
+        mp3_path = f"{tmp_dir}/ytdl_{tmp_id}.mp3"
+        if not _convert_to_mp3(raw_path, mp3_path):
+            try: os.remove(raw_path)
+            except Exception: pass
+            return "", title, duration, "download_fail"
+
+        try: os.remove(raw_path)
+        except Exception: pass
+
+        size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
+        if size_mb > MAX_FILE_MB:
+            try: os.remove(mp3_path)
+            except Exception: pass
+            return "", title, duration, "too_big"
+
+        return mp3_path, title, duration, ""
+
+    except Exception as e:
+        logger.warning(f"pytubefix error: {e}")
+        for fname in os.listdir(tmp_dir):
+            if fname.startswith(f"ytraw_{tmp_id}") or fname.startswith(f"ytdl_{tmp_id}"):
+                try: os.remove(f"{tmp_dir}/{fname}")
+                except Exception: pass
+        return "", "", 0, "download_fail"
 
 
 def _duration_filter(info, *, incomplete):
@@ -10625,120 +10625,13 @@ def _duration_filter(info, *, incomplete):
     return None
 
 
-def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    import yt_dlp
-
-    if not os.path.exists(_COOKIES_PATH):
-        logger.error(f"YouTube Cookies file not found at {_COOKIES_PATH}")
-        return "", "", 0, "no_cookies"
-
-    tmp_id   = uuid.uuid4().hex
-    out_tmpl = f"/tmp/ytraw_{tmp_id}.%(ext)s"
-
-    if any(d in query_or_url for d in ("youtube.com", "youtu.be", "music.youtube.com")):
-        search = query_or_url
-    else:
-        search = f"ytsearch4:{query_or_url}"
-
-    opts = {
-        "quiet"            : True,
-        "no_warnings"      : True,
-        "noplaylist"       : True,
-        "socket_timeout"   : 20,
-        "retries"          : 3,
-        "format"           : "bestaudio/best",
-        "outtmpl"          : out_tmpl,
-        "no_part"          : True,
-        "noprogress"       : True,
-        "match_filter"     : _duration_filter,
-        "cookiefile"       : _COOKIES_PATH,
-        "extractor_args"   : {
-            "youtube": {
-                "player_client": ["android", "web"],
-                "po_token": ["android+gvs"]
-            }
-        },
-        "postprocessors"   : [{
-            "key"             : "FFmpegExtractAudio",
-            "preferredcodec"  : "mp3",
-            "preferredquality": "96",
-        }],
-    }
-
-    title    = "أغنية"
-    duration = 0
-
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(search, download=False)
-            if not info:
-                return "", "", 0, "not_found"
-
-            target_url = query_or_url
-
-            if "entries" in info:
-                entries = [e for e in (info.get("entries") or []) if e]
-                if not entries:
-                    return "", "", 0, "not_found"
-
-                selected_entry = entries[0]
-                for entry in entries:
-                    dur = entry.get("duration", 0)
-                    if dur and 20 <= dur <= MAX_DURATION_SEC:
-                        selected_entry = entry
-                        break
-
-                title      = selected_entry.get("title", "أغنية") or "أغنية"
-                duration   = int(selected_entry.get("duration") or 0)
-                target_url = selected_entry.get("webpage_url") or f"https://www.youtube.com/watch?v={selected_entry.get('id')}"
-            else:
-                title    = info.get("title", "أغنية") or "أغنية"
-                duration = int(info.get("duration") or 0)
-
-            ydl.download([target_url])
-
-    except yt_dlp.utils.DownloadError as e:
-        msg = str(e)
-        logger.warning(f"youtube yt_dlp error: {msg}")
-        if "too_long:" in msg:
-            return "", "", 0, "too_long"
-        for fname in os.listdir("/tmp"):
-            if fname.startswith(f"ytraw_{tmp_id}"):
-                try: os.remove(f"/tmp/{fname}")
-                except Exception: pass
-        return "", "", 0, "download_fail"
-    except Exception as e:
-        logger.warning(f"youtube error: {e}")
-        for fname in os.listdir("/tmp"):
-            if fname.startswith(f"ytraw_{tmp_id}"):
-                try: os.remove(f"/tmp/{fname}")
-                except Exception: pass
-        return "", "", 0, "download_fail"
-
-    audio_path = ""
-    for fname in sorted(os.listdir("/tmp")):
-        if fname.startswith(f"ytraw_{tmp_id}"):
-            audio_path = f"/tmp/{fname}"
-            break
-
-    if not audio_path or not os.path.exists(audio_path):
-        return "", "", 0, "download_fail"
-
-    size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-    if size_mb > MAX_FILE_MB:
-        try: os.remove(audio_path)
-        except Exception: pass
-        return "", title, duration, "too_big"
-
-    return audio_path, title, duration, ""
-
-
 def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
+    """تحميل من SoundCloud عبر yt_dlp — بديل احتياطي موثوق."""
     import yt_dlp
 
     tmp_id   = uuid.uuid4().hex
     out_tmpl = f"/tmp/ytdl_{tmp_id}.%(ext)s"
-    search   = query_or_url if "soundcloud.com" in query_or_url else f"scsearch1:{query_or_url}"
+    search   = query_or_url if _is_soundcloud_url(query_or_url) else f"scsearch1:{query_or_url}"
 
     opts = {
         "quiet"        : True,
@@ -10774,6 +10667,16 @@ def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
             title    = info.get("title", "أغنية") or "أغنية"
             duration = int(info.get("duration") or 0)
 
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e)
+        logger.warning(f"soundcloud yt_dlp error: {msg}")
+        if "too_long:" in msg:
+            return "", "", 0, "too_long"
+        for fname in os.listdir("/tmp"):
+            if fname.startswith(f"ytdl_{tmp_id}"):
+                try: os.remove(f"/tmp/{fname}")
+                except Exception: pass
+        return "", "", 0, "download_fail"
     except Exception as e:
         logger.warning(f"soundcloud error: {e}")
         for fname in os.listdir("/tmp"):
@@ -10801,11 +10704,15 @@ def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
 
 
 def _search_and_download(query_or_url: str) -> tuple[str, str, int, str]:
-    if "soundcloud.com" not in query_or_url:
-        path, title, duration, err = _download_youtube_ytdlp(query_or_url)
+    """
+    يحاول التحميل من يوتيوب عبر pytubefix أولاً،
+    ثم يرجع لـ SoundCloud عبر yt_dlp كبديل احتياطي.
+    """
+    if not _is_soundcloud_url(query_or_url):
+        path, title, duration, err = _download_youtube_pytubefix(query_or_url)
         if not err:
             return path, title, duration, err
-        logger.info(f"youtube failed ({err}), falling back to SoundCloud")
+        logger.info(f"pytubefix failed ({err}), falling back to SoundCloud")
         if err in ("too_long", "too_big"):
             return path, title, duration, err
 
@@ -10829,46 +10736,13 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not await _check_forced_sub(update, context):
         return
 
-    query = text[len(prefix):].strip().lower()
+    query = text[len(prefix):].strip()
     if not query:
         await msg.reply_text("- اكتب اسم الأغنية أو رابط بعد الأمر .")
         return
 
-    _owner_id_mu = _bot_owner_id_var.get()
-    _wk_mu = db_get_worker_settings(_owner_id_mu)
-    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "SOURCE fadi"
-    _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            text=_src_name_mu, 
-            url=_src_url_mu, 
-            style=KeyboardButtonStyle.DANGER
-        )
-    ]])
-
-    loop = asyncio.get_running_loop()
-    cache, cache_sha = await loop.run_in_executor(None, _load_cache_from_github)
-
-    if query in cache:
-        cached_data = cache[query]
-        file_id = cached_data.get("file_id")
-        title = cached_data.get("title", "أغنية")
-        duration = cached_data.get("duration", 0)
-
-        try:
-            await msg.reply_audio(
-                audio=file_id,
-                duration=duration,
-                title=title,
-                performer="YouTube",
-                reply_markup=keyboard,
-            )
-            return
-        except Exception as e:
-            logger.warning(f"Failed to send cached file_id, downloading again: {e}")
-
     wait_msg = await msg.reply_text("- جاري البحث والتحميل ...")
+    loop     = asyncio.get_running_loop()
 
     try:
         filepath, title, duration, err = await asyncio.wait_for(
@@ -10885,7 +10759,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "too_long"     : f"- الأغنية تتجاوز الحد الأقصى ({MAX_DURATION_SEC // 60} دقيقة) .",
         "download_fail": "- فشل التحميل ، جرب مرة ثانية أو أرسل الرابط مباشرة .",
         "too_big"      : "- الملف كبير جداً (+49MB) ، جرب أغنية أقصر .",
-        "no_cookies"   : "- ملف الكوكيز غير موجود (cookies.txt) ، تأكد من رفعه بالمجلد الرئيسي .",
     }
 
     if err:
@@ -10894,11 +10767,17 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await wait_msg.delete()
 
+    _owner_id_mu = _bot_owner_id_var.get()
+    _wk_mu = db_get_worker_settings(_owner_id_mu)
+    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ ᴍɪʟᴀɴᴀ"
+    _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(_src_name_mu, url=_src_url_mu, style=KeyboardButtonStyle.DANGER)
+    ]])
     sent = False
-    sent_msg = None
     try:
         with open(filepath, "rb") as f:
-            sent_msg = await msg.reply_audio(
+            await msg.reply_audio(
                 audio=f,
                 duration=duration,
                 title=title,
@@ -10909,30 +10788,8 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 connect_timeout=30,
             )
         sent = True
-
-        if sent_msg and sent_msg.audio:
-            file_id = sent_msg.audio.file_id
-            
-            if _ARCHIVE_CHANNEL_ID:
-                try:
-                    ch_msg = await context.bot.send_audio(
-                        chat_id=_ARCHIVE_CHANNEL_ID,
-                        audio=file_id,
-                        caption=f"🎵 {title}\n🔎 Key: {query}",
-                        reply_markup=keyboard
-                    )
-                    file_id = ch_msg.audio.file_id
-                except Exception as _ch_err:
-                    logger.warning(f"Failed to forward to archive channel: {_ch_err}")
-
-            cache[query] = {
-                "file_id": file_id,
-                "title": title,
-                "duration": duration
-            }
-            await loop.run_in_executor(None, _save_cache_to_github, cache, cache_sha)
-
     except telegram.error.TimedOut:
+        # الملف وصل لتيليغرام لكن انقطع الاتصال — لا نرسل خطأ
         sent = True
         logger.warning("reply_audio timed out but upload likely succeeded")
     except Exception as e:
