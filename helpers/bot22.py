@@ -10518,6 +10518,7 @@ async def group_reveal_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
+
 import os
 import uuid
 import json
@@ -10530,8 +10531,7 @@ import telegram
 logger = logging.getLogger(__name__)
 
 # ─── GITHUB CACHE CONFIG ──────────────────────────────────────────
-
-GITHUB_TOKEN = "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"
+GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "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")
 GITHUB_REPO   = "alabtmlzqkhn-del/Gy"
 GITHUB_BRANCH = "main"
 FILE_PATH     = "songs_cache.json"
@@ -10556,18 +10556,25 @@ def _get_github_headers():
 
 
 def _load_cache_from_github() -> tuple[dict, str]:
-    """جلب وتحميل كاش الأغاني مباشرة من مستودع GitHub"""
-    if not GITHUB_TOKEN or not GITHUB_REPO:
+    if not GITHUB_TOKEN or "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" in GITHUB_TOKEN:
+        logger.error("GitHub Cache Error: GITHUB_TOKEN is missing!")
         return {}, ""
 
     try:
         response = requests.get(GITHUB_API_URL, headers=_get_github_headers(), timeout=10)
+        logger.info(f"GitHub Fetch Status: {response.status_code}")
         if response.status_code == 200:
             data = response.json()
             sha = data.get("sha", "")
-            content = base64.b64decode(data.get("content", "")).decode("utf-8")
+            content_b64 = data.get("content", "")
+            if not content_b64:
+                return {}, sha
+            content = base64.b64decode(content_b64).decode("utf-8").strip()
+            if not content:
+                return {}, sha
             return json.loads(content), sha
         elif response.status_code == 404:
+            logger.warning("GitHub Cache Error: songs_cache.json not found (404).")
             return {}, ""
     except Exception as e:
         logger.error(f"Error fetching cache from GitHub: {e}")
@@ -10576,32 +10583,37 @@ def _load_cache_from_github() -> tuple[dict, str]:
 
 
 def _save_cache_to_github(cache_data: dict, sha: str = "") -> str:
-    """رفع وتحديث ملف الكاش على مستودع GitHub بشكل دائم"""
-    if not GITHUB_TOKEN or not GITHUB_REPO:
+    if not GITHUB_TOKEN or "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" in GITHUB_TOKEN:
+        logger.error("GitHub Save Error: GITHUB_TOKEN is missing!")
         return ""
 
     json_str = json.dumps(cache_data, ensure_ascii=False, indent=2)
     base64_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
 
-    if not sha:
-        _, sha = _load_cache_from_github()
+    # جلب أحدث sha لمنع التعارض
+    _, latest_sha = _load_cache_from_github()
+    current_sha = latest_sha if latest_sha else sha
 
     payload = {
         "message": "Auto-update songs_cache.json via Bot",
         "content": base64_content,
         "branch": GITHUB_BRANCH
     }
-    if sha:
-        payload["sha"] = sha
+    if current_sha:
+        payload["sha"] = current_sha
 
     try:
         response = requests.put(GITHUB_API_URL, headers=_get_github_headers(), json=payload, timeout=15)
+        logger.info(f"GitHub Save Status Code: {response.status_code}")
         if response.status_code in (200, 201):
+            logger.info("Successfully saved cache to GitHub!")
             return response.json().get("content", {}).get("sha", "")
+        else:
+            logger.error(f"GitHub Save Failed Details: {response.text}")
     except Exception as e:
         logger.error(f"Error saving cache to GitHub: {e}")
 
-    return sha
+    return current_sha
 
 
 def _duration_filter(info, *, incomplete):
@@ -10614,7 +10626,6 @@ def _duration_filter(info, *, incomplete):
 
 
 def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل أساسي يعتمد على ملف الكوكيز للبحث والتحميل من يوتيوب."""
     import yt_dlp
 
     if not os.path.exists(_COOKIES_PATH):
@@ -10723,7 +10734,6 @@ def _download_youtube_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
 
 
 def _download_soundcloud_ytdlp(query_or_url: str) -> tuple[str, str, int, str]:
-    """تحميل من SoundCloud عبر yt_dlp بديل احتياطي."""
     import yt_dlp
 
     tmp_id   = uuid.uuid4().hex
@@ -10829,7 +10839,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "SOURCE fadi"
     _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
 
-    # إنشاء زر السورس الأحمـر
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(
             text=_src_name_mu, 
@@ -10838,7 +10847,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     ]])
 
-    # 1. فحص الكاش الموحد من جيت هاب أولاً للإرسال السريع دون تحميل
     loop = asyncio.get_running_loop()
     cache, cache_sha = await loop.run_in_executor(None, _load_cache_from_github)
 
@@ -10860,7 +10868,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as e:
             logger.warning(f"Failed to send cached file_id, downloading again: {e}")
 
-    # 2. في حال عدم وجودها في الكاش يتم التحميل
     wait_msg = await msg.reply_text("- جاري البحث والتحميل ...")
 
     try:
@@ -10890,7 +10897,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     sent = False
     sent_msg = None
     try:
-        # إرسال الأغنية للمستخدم
         with open(filepath, "rb") as f:
             sent_msg = await msg.reply_audio(
                 audio=f,
@@ -10904,7 +10910,6 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         sent = True
 
-        # 3. إرسال الأغنية تلقائياً إلى قناة الأرشيف وحفظ الـ file_id دائمياً في GitHub
         if sent_msg and sent_msg.audio:
             file_id = sent_msg.audio.file_id
             
@@ -10916,12 +10921,10 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         caption=f"🎵 {title}\n🔎 Key: {query}",
                         reply_markup=keyboard
                     )
-                    # اعتماد file_id الخاص بالقناة لضمان بقائه يعمل دائماً للجميع
                     file_id = ch_msg.audio.file_id
                 except Exception as _ch_err:
                     logger.warning(f"Failed to forward to archive channel: {_ch_err}")
 
-            # تحديث الملف الموحد ورفعه سحابياً لـ GitHub
             cache[query] = {
                 "file_id": file_id,
                 "title": title,
