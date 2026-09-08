@@ -10531,7 +10531,7 @@ logger = logging.getLogger(__name__)
 
 # ─── GITHUB CACHE CONFIG ──────────────────────────────────────────
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_TOKEN = "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"
 GITHUB_REPO   = "alabtmlzqkhn-del/Gy"
 GITHUB_BRANCH = "main"
 FILE_PATH     = "songs_cache.json"
