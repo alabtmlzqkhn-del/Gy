@@ -10769,7 +10769,7 @@ async def music_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     _owner_id_mu = _bot_owner_id_var.get()
     _wk_mu = db_get_worker_settings(_owner_id_mu)
-    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ ᴍɪʟᴀɴᴀ"
+    _src_name_mu = _wk_mu["source_btn_name"] if _wk_mu["is_paid"] and _wk_mu["source_btn_name"] else "ꜱᴏᴜʀᴄᴇ f̶a̶d̶i̶"
     _src_url_mu  = _wk_mu["source_btn_url"]  if _wk_mu["is_paid"] and _wk_mu["source_btn_url"]  else SOURCE_URL
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(_src_name_mu, url=_src_url_mu, style=KeyboardButtonStyle.DANGER)
