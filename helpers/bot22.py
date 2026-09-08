@@ -10530,7 +10530,7 @@ import telegram
 logger = logging.getLogger(__name__)
 
 # ─── GITHUB CACHE CONFIG ──────────────────────────────────────────
-GITHUB_TOKEN  = "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"
+GITHUB_TOKEN  = "GITHUB_TOKEN"
 GITHUB_REPO   = "alabtmlzqkhn-del/Gy"
 GITHUB_BRANCH = "main"
 FILE_PATH     = "songs_cache.json"
